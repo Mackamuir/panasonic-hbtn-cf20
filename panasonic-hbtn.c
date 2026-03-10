@@ -35,7 +35,7 @@
 
 
 MODULE_AUTHOR("Heiher");
-MODULE_DESCRIPTION("ACPI Tablet Button driver for Panasonic CF-18/19 laptops");
+MODULE_DESCRIPTION("ACPI Tablet Button driver for Panasonic CF-18/19/20 laptops");
 MODULE_LICENSE("GPL");
 
 /* Define ACPI PATHs */
@@ -49,12 +49,30 @@ MODULE_LICENSE("GPL");
 #define ACPI_PCC_INPUT_PHYS    "panasonic/hbtn0"
 
 static int acpi_pcc_hbtn_add(struct acpi_device *device);
-static int acpi_pcc_hbtn_remove(struct acpi_device *device);
+static void acpi_pcc_hbtn_remove(struct acpi_device *device);
 static void acpi_pcc_hbtn_notify(struct acpi_device *device, u32 event);
+
+static const struct key_entry panasonic_keymap[] = {
+    { KE_KEY, 0x0, { KEY_RESERVED } },
+    { KE_KEY, 0x4, { KEY_SCREENLOCK } }, /* Screen lock */
+    { KE_KEY, 0x6, { KEY_DIRECTION } }, /* Screen rotate */
+    { KE_KEY, 0x8, { KEY_ENTER } }, /* Enter */
+    { KE_KEY, 0xA, { KEY_KEYBOARD } }, /* Soft keyboard */
+    { KE_END, 0 }
+};
+
+static const struct key_entry panasonic_keymap_cf20[] = {
+    { KE_KEY, 0x0, { KEY_RESERVED } },
+    { KE_KEY, 0x2, { KEY_PROG2 } }, /* A2 */
+    { KE_KEY, 0x6, { KEY_PROG3 } }, /* Screen rotate */
+    { KE_KEY, 0x8, { KEY_PROG1 } }, /* A1 */
+    { KE_END, 0 }
+};
 
 static const struct acpi_device_id pcc_device_ids[] = {
     { "MAT001F", 0},
     { "MAT0020", 0},
+    { "MAT0034", 0},
     { "", 0},
 };
 MODULE_DEVICE_TABLE(acpi, pcc_device_ids);
@@ -68,15 +86,6 @@ static struct acpi_driver acpi_pcc_driver = {
                 .remove =    acpi_pcc_hbtn_remove,
                 .notify =    acpi_pcc_hbtn_notify,
             },
-};
-
-static const struct key_entry panasonic_keymap[] = {
-    { KE_KEY, 0x0, { KEY_RESERVED } },
-    { KE_KEY, 0x4, { KEY_SCREENLOCK } }, /* Screen lock */
-    { KE_KEY, 0x6, { KEY_DIRECTION } }, /* Screen rotate */
-    { KE_KEY, 0x8, { KEY_ENTER } }, /* Enter */
-    { KE_KEY, 0xA, { KEY_KEYBOARD } }, /* Soft keyboard */
-    { KE_END, 0 }
 };
 
 struct pcc_acpi {
@@ -130,7 +139,8 @@ static void acpi_pcc_hbtn_notify(struct acpi_device *device, u32 event)
     }
 }
 
-static int acpi_pcc_init_input(struct pcc_acpi *pcc)
+static int acpi_pcc_init_input(struct pcc_acpi *pcc,
+                   const struct key_entry *keymap)
 {
     struct input_dev *input_dev;
     int error;
@@ -149,7 +159,7 @@ static int acpi_pcc_init_input(struct pcc_acpi *pcc)
     input_dev->id.product = 0x0001;
     input_dev->id.version = 0x0100;
 
-    error = sparse_keymap_setup(input_dev, panasonic_keymap, NULL);
+    error = sparse_keymap_setup(input_dev, keymap, NULL);
     if (error) {
         ACPI_DEBUG_PRINT((ACPI_DB_ERROR,
                   "Unable to setup input device keymap\n"));
@@ -160,14 +170,12 @@ static int acpi_pcc_init_input(struct pcc_acpi *pcc)
     if (error) {
         ACPI_DEBUG_PRINT((ACPI_DB_ERROR,
                   "Unable to register input device\n"));
-        goto err_free_keymap;
+        goto err_free_dev;
     }
 
     pcc->input_dev = input_dev;
     return 0;
 
- err_free_keymap:
-    sparse_keymap_free(input_dev);
  err_free_dev:
     input_free_device(input_dev);
     return error;
@@ -175,7 +183,6 @@ static int acpi_pcc_init_input(struct pcc_acpi *pcc)
 
 static void acpi_pcc_destroy_input(struct pcc_acpi *pcc)
 {
-    sparse_keymap_free(pcc->input_dev);
     input_unregister_device(pcc->input_dev);
     /*
      * No need to input_free_device() since core input API refcounts
@@ -206,7 +213,9 @@ static int acpi_pcc_hbtn_add(struct acpi_device *device)
     strcpy(acpi_device_name(device), ACPI_PCC_DEVICE_NAME);
     strcpy(acpi_device_class(device), ACPI_PCC_CLASS);
 
-    result = acpi_pcc_init_input(pcc);
+    result = acpi_pcc_init_input(pcc,
+        strcmp(acpi_device_hid(device), "MAT0034") == 0
+            ? panasonic_keymap_cf20 : panasonic_keymap);
     if (result) {
         ACPI_DEBUG_PRINT((ACPI_DB_ERROR,
                   "Error installing keyinput handler\n"));
@@ -238,18 +247,13 @@ static int __init acpi_pcc_init(void)
     return 0;
 }
 
-static int acpi_pcc_hbtn_remove(struct acpi_device *device)
+static void acpi_pcc_hbtn_remove(struct acpi_device *device)
 {
     struct pcc_acpi *pcc = acpi_driver_data(device);
-
-    if (!device || !pcc)
-        return -EINVAL;
 
     acpi_pcc_destroy_input(pcc);
 
     kfree(pcc);
-
-    return 0;
 }
 
 static void __exit acpi_pcc_exit(void)
